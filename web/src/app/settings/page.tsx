@@ -11,6 +11,7 @@ import { ApiDocsCard } from "./components/api-docs-card";
 import { ConfigCard } from "./components/config-card";
 import { CPAPoolDialog } from "./components/cpa-pool-dialog";
 import { CPAPoolsCard } from "./components/cpa-pools-card";
+import { ImageApiCard } from "./components/image-api-card";
 import { ImportBrowserDialog } from "./components/import-browser-dialog";
 import { ProxyRuntimeCard } from "./components/proxy-runtime-card";
 import { SettingsHeader } from "./components/settings-header";
@@ -28,6 +29,7 @@ const settingsTabs = [
   { value: "proxy", title: "FlareSolverr" },
   { value: "cpa", title: "CPA" },
   { value: "sub2api", title: "Sub2API" },
+  { value: "image-api", title: "第三方生图" },
 ];
 
 function SettingsDataController() {
@@ -112,6 +114,9 @@ function SettingsPageContent() {
         </TabsContent>
         <TabsContent value="sub2api">
           <Sub2APIConnections />
+        </TabsContent>
+        <TabsContent value="image-api">
+          <ImageApiCard />
         </TabsContent>
       </Tabs>
       <CPAPoolDialog />

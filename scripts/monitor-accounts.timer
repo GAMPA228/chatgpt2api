@@ -1,0 +1,12 @@
+[Unit]
+Description=Run ChatGPT2API Account Pool Monitor every 5 minutes
+
+[Timer]
+# 每5分钟执行一次
+OnBootSec=2min
+OnUnitActiveSec=5min
+# 错过执行时间（如机器关机）则立即补执行
+Persistent=true
+
+[Install]
+WantedBy=timers.target

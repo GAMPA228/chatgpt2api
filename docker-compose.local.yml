@@ -10,9 +10,15 @@ services:
     volumes:
       - ./data:/app/data
       - ./config.json:/app/config.json
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   
     environment:
       STORAGE_BACKEND: sqlite
+      HTTP_PROXY: http://host.docker.internal:7890
+      HTTPS_PROXY: http://host.docker.internal:7890
       DATABASE_URL: sqlite:////app/data/accounts.db
+      # 以下为可选配置，根据需要取消注释
+      CHATGPT2API_AUTH_KEY: agent2026
     # 存储后端配置 (可选值: json, sqlite, postgres, git)
     # environment:
     #   STORAGE_BACKEND: json

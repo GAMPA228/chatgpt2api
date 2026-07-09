@@ -71,6 +71,11 @@ const DEFAULT_THIRD_PARTY_APPS: ThirdPartyAppsSettings = {
     enabled: false,
     url: "https://canvas.best",
   },
+  image_api: {
+    enabled: false,
+    base_url: "",
+    api_key: "",
+  },
 };
 
 function normalizeProxyRuntime(value: unknown): ProxyRuntimeSettings {
@@ -117,13 +122,21 @@ function normalizeProxyRuntime(value: unknown): ProxyRuntimeSettings {
 
 function normalizeThirdPartyApps(value: unknown): ThirdPartyAppsSettings {
   const source = typeof value === "object" && value !== null ? value as Partial<ThirdPartyAppsSettings> : {};
-  const canvas = typeof source.infinite_canvas === "object" && source.infinite_canvas
+  const canvas = (typeof source.infinite_canvas === "object" && source.infinite_canvas
     ? source.infinite_canvas
-    : {};
+    : {}) as { enabled?: boolean; url?: string };
+  const imageApi = (typeof source.image_api === "object" && source.image_api
+    ? source.image_api
+    : {}) as { enabled?: boolean; base_url?: string; api_key?: string };
   return {
     infinite_canvas: {
-      enabled: Boolean(canvas.enabled),
-      url: String(canvas.url || DEFAULT_THIRD_PARTY_APPS.infinite_canvas.url),
+      enabled: Boolean((canvas as { enabled?: boolean }).enabled),
+      url: String((canvas as { url?: string }).url || DEFAULT_THIRD_PARTY_APPS.infinite_canvas.url),
+    },
+    image_api: {
+      enabled: Boolean((imageApi as { enabled?: boolean }).enabled),
+      base_url: String((imageApi as { base_url?: string }).base_url || ""),
+      api_key: String((imageApi as { api_key?: string }).api_key || ""),
     },
   };
 }
@@ -319,6 +332,7 @@ type SettingsStore = {
   setProxyRuntimeClearanceField: <K extends keyof ProxyRuntimeSettings["clearance"]>(key: K, value: ProxyRuntimeSettings["clearance"][K]) => void;
   setProxyRuntimeStatusCodesText: (value: string) => void;
   setInfiniteCanvasField: <K extends keyof ThirdPartyAppsSettings["infinite_canvas"]>(key: K, value: ThirdPartyAppsSettings["infinite_canvas"][K]) => void;
+  setThirdPartyImageApiField: <K extends keyof ThirdPartyAppsSettings["image_api"]>(key: K, value: ThirdPartyAppsSettings["image_api"][K]) => void;
   testImageStorage: () => Promise<void>;
   syncImagesToWebDAV: () => Promise<void>;
   setBackupField: (key: keyof BackupSettings, value: string | boolean) => void;
@@ -498,6 +512,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           infinite_canvas: {
             enabled: Boolean(config.third_party_apps?.infinite_canvas?.enabled),
             url: String(config.third_party_apps?.infinite_canvas?.url || DEFAULT_THIRD_PARTY_APPS.infinite_canvas.url).trim(),
+          },
+          image_api: {
+            enabled: Boolean(config.third_party_apps?.image_api?.enabled),
+            base_url: String(config.third_party_apps?.image_api?.base_url || "").trim(),
+            api_key: String(config.third_party_apps?.image_api?.api_key || "").trim(),
           },
         },
         backup: {
@@ -730,6 +749,27 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
             ...apps,
             infinite_canvas: {
               ...apps.infinite_canvas,
+              [key]: value,
+            },
+          },
+        },
+      };
+    });
+  },
+
+  setThirdPartyImageApiField: (key, value) => {
+    set((state) => {
+      if (!state.config) {
+        return {};
+      }
+      const apps = normalizeThirdPartyApps(state.config.third_party_apps);
+      return {
+        config: {
+          ...state.config,
+          third_party_apps: {
+            ...apps,
+            image_api: {
+              ...apps.image_api,
               [key]: value,
             },
           },

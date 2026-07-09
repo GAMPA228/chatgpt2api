@@ -150,6 +150,11 @@ export type ThirdPartyAppsSettings = {
     enabled: boolean;
     url: string;
   };
+  image_api: {
+    enabled: boolean;
+    base_url: string;
+    api_key: string;
+  };
 };
 
 export type SettingsConfig = {

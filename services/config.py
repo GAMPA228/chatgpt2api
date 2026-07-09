@@ -83,6 +83,12 @@ DEFAULT_THIRD_PARTY_APPS = {
     },
 }
 
+DEFAULT_THIRD_PARTY_IMAGE_API = {
+    "enabled": False,
+    "base_url": "",
+    "api_key": "",
+}
+
 
 def _normalize_bool(value: object, default: bool = False) -> bool:
     if isinstance(value, str):
@@ -280,10 +286,16 @@ def _normalize_proxy_runtime_settings(value: object) -> dict[str, object]:
 def _normalize_third_party_apps_settings(value: object) -> dict[str, object]:
     source = value if isinstance(value, dict) else {}
     canvas_source = source.get("infinite_canvas") if isinstance(source.get("infinite_canvas"), dict) else {}
+    image_api_source = source.get("image_api") if isinstance(source.get("image_api"), dict) else {}
     return {
         "infinite_canvas": {
             "enabled": _normalize_bool(canvas_source.get("enabled"), False),
             "url": str(canvas_source.get("url") or DEFAULT_THIRD_PARTY_APPS["infinite_canvas"]["url"]).strip(),
+        },
+        "image_api": {
+            "enabled": _normalize_bool(image_api_source.get("enabled") if isinstance(image_api_source, dict) else None, False),
+            "base_url": str((image_api_source.get("base_url") if isinstance(image_api_source, dict) else "") or DEFAULT_THIRD_PARTY_IMAGE_API["base_url"]).strip().rstrip("/"),
+            "api_key": str((image_api_source.get("api_key") if isinstance(image_api_source, dict) else "") or DEFAULT_THIRD_PARTY_IMAGE_API["api_key"]).strip(),
         },
     }
 
@@ -583,6 +595,11 @@ class ConfigStore:
 
     def get_third_party_apps_settings(self) -> dict[str, object]:
         return _normalize_third_party_apps_settings(self.data.get("third_party_apps"))
+
+    def get_third_party_image_api_settings(self) -> dict[str, object]:
+        apps = self.get_third_party_apps_settings()
+        image_api = apps.get("image_api") if isinstance(apps, dict) else {}
+        return image_api if isinstance(image_api, dict) else dict(DEFAULT_THIRD_PARTY_IMAGE_API)
 
     def update(self, data: dict[str, object]) -> dict[str, object]:
         next_data = dict(self.data)

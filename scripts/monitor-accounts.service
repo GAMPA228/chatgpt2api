@@ -1,0 +1,11 @@
+[Unit]
+Description=ChatGPT2API Account Pool Monitor
+After=network-online.target
+
+[Service]
+Type=oneshot
+# 按需修改下面三个参数
+ExecStart=/usr/bin/python3 /home/zfc/chatgpt2api/chatgpt2api/scripts/monitor_accounts.py --url http://localhost:8000 --key agent2026 --proxy http://127.0.0.1:7890
+# 标准输出和错误都写日志
+StandardOutput=journal
+StandardError=journal

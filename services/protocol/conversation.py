@@ -13,7 +13,7 @@ import tiktoken
 from services.account_service import account_service
 from services.config import config
 from services.image_storage_service import image_storage_service
-from services.openai_backend_api import ImageContentPolicyError, ImagePollTimeoutError, OpenAIBackendAPI
+from services.openai_backend_api import ImageContentPolicyError, ImagePollTimeoutError, ImageTextReplyError, OpenAIBackendAPI
 from utils.helper import (
     IMAGE_MODELS,
     extract_image_from_message_content,
@@ -103,10 +103,35 @@ def is_connection_timeout_error(message: str) -> bool:
     )
 
 
+def is_retryable_stream_close_error(message: str) -> bool:
+    """检测上游图片长连接被异常关闭的场景。
+
+    这类错误通常发生在 SSE 生图过程中：上游任务可能已经开始，
+    但 HTTP/2/代理/中间链路先把流断掉了。此时更合理的策略是：
+    让当前账号快速失败，然后由上层切换账号重试一次，而不是原地
+    长时间卡住到最终报错。
+    """
+    text = str(message or "").lower()
+    return (
+        "curl: (56)" in text
+        or "connection closed abruptly" in text
+        or "curl: (92)" in text
+        or "http/2 stream" in text
+        or "was not closed cleanly" in text
+    )
+
+
+def is_stream_transport_error(message: str) -> bool:
+    text = str(message or "")
+    return is_retryable_stream_close_error(text) or is_tls_connection_error(text) or is_connection_timeout_error(text)
+
+
 def image_stream_error_message(message: str) -> str:
     text = str(message or "")
     if is_token_invalid_error(text):
         return "image generation failed"
+    if is_retryable_stream_close_error(text):
+        return "upstream image stream interrupted, please retry later"
     if is_tls_connection_error(text):
         return "upstream image connection failed, please retry later"
     if is_connection_timeout_error(text):
@@ -1230,20 +1255,28 @@ def _generate_single_image(
     MAX_CONN_TIMEOUT_RETRIES = 3
     # 轮询超时错误最大重试次数（换账号重试）
     MAX_POLL_TIMEOUT_RETRIES = 4
+    # SSE 流中断快速重试次数
+    MAX_STREAM_CLOSE_RETRIES = 1
 
     text_reply_retry_count = 0
     tls_retry_count = 0
     conn_timeout_retry_count = 0
     poll_timeout_retry_count = 0
+    stream_close_retry_count = 0
     account_email = ""
+    retry_token = ""
 
     while True:
         try:
-            if request.progress_callback:
-                request.progress_callback("getting_account")
-            plan_type, _ = split_image_model(request.model)
-            codex_model = is_codex_image_model(request.model)
-            token = account_service.get_available_access_token(
+            if retry_token:
+                token = retry_token
+                retry_token = ""
+            else:
+                if request.progress_callback:
+                    request.progress_callback("getting_account")
+                plan_type, _ = split_image_model(request.model)
+                codex_model = is_codex_image_model(request.model)
+                token = account_service.get_available_access_token(
                 plan_type=plan_type,
                 source_type="codex" if codex_model else None,
                 plan_types=("plus", "team", "pro") if codex_model and not plan_type else None,
@@ -1263,6 +1296,7 @@ def _generate_single_image(
             "account_found": bool(account),
             "index": index,
         })
+        backend = None
         try:
             backend = OpenAIBackendAPI(access_token=token)
             if request.progress_callback:
@@ -1329,6 +1363,36 @@ def _generate_single_image(
                 })
                 raise
             raise
+        except ImageTextReplyError as exc:
+            account_service.mark_image_result(token, False)
+            error_text = str(exc) or "上游返回了文本回复而不是图片。"
+            if not emitted_for_token:
+                text_reply_retry_count += 1
+                if text_reply_retry_count <= MAX_TEXT_REPLY_RETRIES:
+                    logger.warning({
+                        "event": "image_model_text_reply_retry",
+                        "request_token": token,
+                        "account_email": account_email,
+                        "retry_count": text_reply_retry_count,
+                        "index": index,
+                        "error": error_text[:200],
+                    })
+                    continue
+                logger.warning({
+                    "event": "image_model_text_reply_exhausted_retries",
+                        "request_token": token,
+                        "account_email": account_email,
+                        "retry_count": text_reply_retry_count,
+                        "index": index,
+                })
+            raise ImageGenerationError(
+                error_text,
+                status_code=400,
+                error_type="invalid_request_error",
+                code="upstream_text_reply",
+                account_email=account_email,
+                conversation_id=getattr(exc, "conversation_id", ""),
+            ) from exc
         except ImageContentPolicyError as exc:
             account_service.mark_image_result(token, False)
             logger.warning({
@@ -1401,10 +1465,24 @@ def _generate_single_image(
             if not emitted_for_token and is_token_invalid_error(last_error):
                 refreshed_token = account_service.refresh_access_token(token, force=True, event="image_stream")
                 if refreshed_token and refreshed_token != token:
-                    token = refreshed_token
+                    retry_token = refreshed_token
                     continue
                 account_service.remove_invalid_token(token, "image_stream")
                 continue
+            # SSE 长连接被异常关闭（curl 56/92 等）：快速切账号重试一次
+            if not emitted_for_token and is_retryable_stream_close_error(last_error):
+                stream_close_retry_count += 1
+                if stream_close_retry_count <= MAX_STREAM_CLOSE_RETRIES:
+                    logger.warning({
+                        "event": "image_stream_retryable_close_retry",
+                        "request_token": token,
+                        "account_email": account_email,
+                        "retry_count": tls_retry_count,
+                        "index": index,
+                        "error": last_error[:200],
+                    })
+                    time.sleep(1.5)
+                    continue
             # TLS/SSL 连接错误：自动重试
             if not emitted_for_token and is_tls_connection_error(last_error):
                 tls_retry_count += 1
@@ -1436,6 +1514,14 @@ def _generate_single_image(
                     time.sleep(wait_secs)
                     continue
             raise ImageGenerationError(image_stream_error_message(last_error), account_email=account_email, conversation_id="") from exc
+        finally:
+            if backend is not None:
+                try:
+                    backend.close()
+                except Exception:
+                    pass
+
+
 
 
 def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[ImageOutput]:

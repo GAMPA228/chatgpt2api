@@ -41,6 +41,11 @@ class ImageContentPolicyError(RuntimeError):
     pass
 
 
+class ImageTextReplyError(RuntimeError):
+    """图片回合最终返回面向用户的文本，而不是图片产物。"""
+    pass
+
+
 @dataclass
 class ChatRequirements:
     """保存一次对话请求所需的 sentinel token。"""
@@ -2119,6 +2124,9 @@ class OpenAIBackendAPI:
             return True
 
         last_task_error = ""
+        last_text_reply = ""
+        last_text_reply_actionable = False
+        last_assistant_text = ""
         while _remaining() > 0:
             attempt += 1
             # 在每次轮询时，检查 /backend-api/tasks/ 是否有错误（仅记录，不中断）
@@ -2181,6 +2189,16 @@ class OpenAIBackendAPI:
                         "error_msg": policy_msg[:200],
                     })
                     raise ImageContentPolicyError(policy_msg)
+                text_reply = self._find_image_text_reply_in_conversation(conversation)
+                if text_reply:
+                    last_assistant_text = text_reply
+                    actionable_text_reply = self._find_actionable_image_text_reply_in_conversation(conversation)
+                    if actionable_text_reply:
+                        last_text_reply = actionable_text_reply
+                        last_text_reply_actionable = True
+                        exc = ImageTextReplyError(actionable_text_reply)
+                        setattr(exc, "conversation_id", conversation_id or "")
+                        raise exc
 
             logger.debug({"event": "image_poll_check", "conversation_id": conversation_id, "attempt": attempt,
                           "file_ids": file_ids, "sediment_ids": sediment_ids})
@@ -2222,6 +2240,7 @@ class OpenAIBackendAPI:
             # attempts_made == 0 means the initial_wait consumed the entire budget — no HTTP attempted.
             "initial_wait_exhausted_budget": attempt == 0,
             "last_task_error": last_task_error if last_task_error else None,
+            "last_text_reply": last_text_reply if last_text_reply_actionable else None,
         })
         exc = ImagePollTimeoutError(
             f"ChatGPT 生图超时（已等待 {timeout_secs} 秒）。"
@@ -2231,6 +2250,8 @@ class OpenAIBackendAPI:
         if last_task_error:
             setattr(exc, "task_error", last_task_error)
         setattr(exc, "conversation_id", conversation_id or "")
+        setattr(exc, "last_assistant_text", last_assistant_text if last_text_reply_actionable else "")
+        setattr(exc, "last_text_reply", last_text_reply if last_text_reply_actionable else "")
         raise exc
 
     def _get_file_download_url(self, file_id: str) -> str:
