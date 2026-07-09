@@ -1728,6 +1728,138 @@ class OpenAIBackendAPI:
         return "\n".join(part for part in parts if part).strip()
 
     @staticmethod
+    def _json_text_candidate(text: str) -> str:
+        value = str(text or "").strip()
+        fence = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", value, flags=re.IGNORECASE | re.DOTALL)
+        if fence:
+            return fence.group(1).strip()
+        return value
+
+    @classmethod
+    def _is_image_tool_argument_text(cls, text: str) -> bool:
+        candidate = cls._json_text_candidate(text)
+        if not candidate:
+            return False
+        try:
+            parsed = json.loads(candidate)
+        except (TypeError, ValueError):
+            stripped = candidate.lstrip()
+            if not stripped.startswith(("{", "[")):
+                return False
+            lower = stripped.lower()
+            if '"referenced_image_ids"' in lower:
+                return True
+            if '"prompt"' in lower and any(f'"{key}"' in lower for key in ("size", "n", "quality", "style")):
+                return True
+            return '"size"' in lower and '"n"' in lower
+
+        keys: set[str] = set()
+
+        def collect_keys(value: Any) -> None:
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    keys.add(str(key).strip().lower())
+                    collect_keys(item)
+            elif isinstance(value, list):
+                for item in value:
+                    collect_keys(item)
+
+        collect_keys(parsed)
+        if "referenced_image_ids" in keys:
+            return True
+        image_option_keys = {"prompt", "size", "n", "quality", "style", "referenced_image_ids"}
+        return bool(keys & image_option_keys) and keys.issubset(image_option_keys | {"mask", "image", "background", "output_format"})
+
+    @classmethod
+    def _is_human_facing_image_text_reply(cls, text: str) -> bool:
+        value = str(text or "").strip()
+        if not value:
+            return False
+        if cls._is_image_tool_argument_text(value):
+            return False
+        return True
+
+    @staticmethod
+    def _is_image_generation_state_payload(payload: Any) -> bool:
+        try:
+            text = json.dumps(payload, ensure_ascii=False)
+        except Exception:
+            text = str(payload)
+        lowered = text.lower()
+        return any(item in lowered for item in (
+            '"status":"in_progress"',
+            '"status":"pending"',
+            '"status":"queued"',
+            '"is_complete":false',
+            '"finished_successfully"',
+        ))
+
+    @staticmethod
+    def _has_nonterminal_structured_status(payload: Any) -> bool:
+        try:
+            text = json.dumps(payload, ensure_ascii=False)
+        except Exception:
+            text = str(payload)
+        lowered = text.lower()
+        return any(item in lowered for item in ('"in_progress"', '"pending"', '"queued"', '"generating"'))
+
+    @classmethod
+    def _is_human_facing_image_text_reply_payload(cls, text: str, payload: Any | None = None) -> bool:
+        if not cls._is_human_facing_image_text_reply(text):
+            return False
+        if payload is None:
+            return True
+        if cls._is_image_generation_state_payload(payload):
+            return False
+        if cls._has_nonterminal_structured_status(payload):
+            return False
+        file_ids, sediment_ids = cls._extract_image_reference_ids(payload)
+        if file_ids or sediment_ids:
+            return False
+        return not cls._has_image_asset_pointer(payload)
+
+    def _find_image_text_reply_in_conversation(self, data: Dict[str, Any]) -> str:
+        mapping_value = data.get("mapping") or {}
+        mapping = mapping_value if isinstance(mapping_value, dict) else {}
+        candidates: list[tuple[float, str]] = []
+        for node in mapping.values():
+            message = (node or {}).get("message") or {}
+            if not isinstance(message, dict):
+                continue
+            author = message.get("author") or {}
+            role = str(author.get("role") or "").strip().lower()
+            if role not in {"assistant", "tool"}:
+                continue
+            text = self._editable_message_text(message)
+            if not self._is_human_facing_image_text_reply_payload(text, message):
+                continue
+            candidates.append((float(message.get("create_time") or 0.0), text))
+        if not candidates:
+            return ""
+        candidates.sort(key=lambda item: item[0])
+        return candidates[-1][1][:2000]
+
+    def _find_actionable_image_text_reply_in_conversation(self, data: Dict[str, Any]) -> str:
+        mapping_value = data.get("mapping") or {}
+        mapping = mapping_value if isinstance(mapping_value, dict) else {}
+        candidates: list[tuple[float, str]] = []
+        for node in mapping.values():
+            message = (node or {}).get("message") or {}
+            if not isinstance(message, dict):
+                continue
+            author = message.get("author") or {}
+            role = str(author.get("role") or "").strip().lower()
+            if role != "assistant":
+                continue
+            text = self._editable_message_text(message)
+            if self._is_human_facing_image_text_reply_payload(text, message):
+                candidates.append((float(message.get("create_time") or 0.0), text))
+        if not candidates:
+            return ""
+        candidates.sort(key=lambda item: item[0])
+        return candidates[-1][1][:2000]
+
+    @staticmethod
     def _extract_editable_export_paths(payload: Any, export_file_re: re.Pattern[str]) -> list[str]:
         if isinstance(payload, str):
             text = payload
