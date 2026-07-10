@@ -85,8 +85,8 @@ DEFAULT_THIRD_PARTY_APPS = {
 
 DEFAULT_THIRD_PARTY_IMAGE_API = {
     "enabled": False,
-    "base_url": "",
-    "api_key": "",
+    "active_channel_id": "",
+    "channels": [],
 }
 
 
@@ -283,6 +283,48 @@ def _normalize_proxy_runtime_settings(value: object) -> dict[str, object]:
     }
 
 
+def _normalize_third_party_image_channel(value: object, index: int, used_ids: set[str]) -> dict[str, str]:
+    source = value if isinstance(value, dict) else {}
+    raw_id = str(source.get("id") or "").strip()
+    channel_id = raw_id or f"channel-{index}"
+    if channel_id in used_ids:
+        channel_id = f"channel-{index}"
+        suffix = 2
+        while channel_id in used_ids:
+            channel_id = f"channel-{index}-{suffix}"
+            suffix += 1
+    used_ids.add(channel_id)
+    return {
+        "id": channel_id,
+        "name": str(source.get("name") or f"渠道 {index}").strip() or f"渠道 {index}",
+        "base_url": str(source.get("base_url") or "").strip().rstrip("/"),
+        "api_key": str(source.get("api_key") or "").strip(),
+    }
+
+
+def _normalize_third_party_image_api_settings(value: object) -> dict[str, object]:
+    source = value if isinstance(value, dict) else {}
+    raw_channels = source.get("channels")
+    channels_source = raw_channels if isinstance(raw_channels, list) else []
+    if not channels_source and (source.get("base_url") or source.get("api_key")):
+        channels_source = [{
+            "id": "legacy",
+            "name": "默认渠道",
+            "base_url": source.get("base_url"),
+            "api_key": source.get("api_key"),
+        }]
+
+    used_ids: set[str] = set()
+    channels = [_normalize_third_party_image_channel(item, index, used_ids) for index, item in enumerate(channels_source, start=1)]
+    requested_active_id = str(source.get("active_channel_id") or "").strip()
+    active_channel_id = requested_active_id if any(channel["id"] == requested_active_id for channel in channels) else (channels[0]["id"] if channels else "")
+    return {
+        "enabled": _normalize_bool(source.get("enabled"), False),
+        "active_channel_id": active_channel_id,
+        "channels": channels,
+    }
+
+
 def _normalize_third_party_apps_settings(value: object) -> dict[str, object]:
     source = value if isinstance(value, dict) else {}
     canvas_source = source.get("infinite_canvas") if isinstance(source.get("infinite_canvas"), dict) else {}
@@ -292,11 +334,7 @@ def _normalize_third_party_apps_settings(value: object) -> dict[str, object]:
             "enabled": _normalize_bool(canvas_source.get("enabled"), False),
             "url": str(canvas_source.get("url") or DEFAULT_THIRD_PARTY_APPS["infinite_canvas"]["url"]).strip(),
         },
-        "image_api": {
-            "enabled": _normalize_bool(image_api_source.get("enabled") if isinstance(image_api_source, dict) else None, False),
-            "base_url": str((image_api_source.get("base_url") if isinstance(image_api_source, dict) else "") or DEFAULT_THIRD_PARTY_IMAGE_API["base_url"]).strip().rstrip("/"),
-            "api_key": str((image_api_source.get("api_key") if isinstance(image_api_source, dict) else "") or DEFAULT_THIRD_PARTY_IMAGE_API["api_key"]).strip(),
-        },
+        "image_api": _normalize_third_party_image_api_settings(image_api_source),
     }
 
 
@@ -599,7 +637,22 @@ class ConfigStore:
     def get_third_party_image_api_settings(self) -> dict[str, object]:
         apps = self.get_third_party_apps_settings()
         image_api = apps.get("image_api") if isinstance(apps, dict) else {}
-        return image_api if isinstance(image_api, dict) else dict(DEFAULT_THIRD_PARTY_IMAGE_API)
+        if not isinstance(image_api, dict):
+            return {"enabled": False, "base_url": "", "api_key": ""}
+        active_channel_id = str(image_api.get("active_channel_id") or "")
+        raw_channels = image_api.get("channels")
+        channels: list[object] = raw_channels if isinstance(raw_channels, list) else []
+        active_channel: dict[str, object] | None = None
+        for channel in channels:
+            if isinstance(channel, dict) and str(channel.get("id") or "") == active_channel_id:
+                active_channel = channel
+                break
+        if active_channel is None:
+            return {"enabled": False, "base_url": "", "api_key": ""}
+        return {
+            **active_channel,
+            "enabled": bool(image_api.get("enabled")),
+        }
 
     def update(self, data: dict[str, object]) -> dict[str, object]:
         next_data = dict(self.data)

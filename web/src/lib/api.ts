@@ -145,6 +145,13 @@ export type ProxyRuntimeResponse = {
   status: ProxyRuntimeStatus;
 };
 
+export type ThirdPartyImageChannel = {
+  id: string;
+  name: string;
+  base_url: string;
+  api_key: string;
+};
+
 export type ThirdPartyAppsSettings = {
   infinite_canvas: {
     enabled: boolean;
@@ -152,8 +159,8 @@ export type ThirdPartyAppsSettings = {
   };
   image_api: {
     enabled: boolean;
-    base_url: string;
-    api_key: string;
+    active_channel_id: string;
+    channels: ThirdPartyImageChannel[];
   };
 };
 

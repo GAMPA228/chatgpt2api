@@ -37,6 +37,7 @@ import {
   type RegisterConfig,
   type SettingsConfig,
   type ThirdPartyAppsSettings,
+  type ThirdPartyImageChannel,
 } from "@/lib/api";
 
 export const PAGE_SIZE_OPTIONS = ["50", "100", "200"] as const;
@@ -73,8 +74,8 @@ const DEFAULT_THIRD_PARTY_APPS: ThirdPartyAppsSettings = {
   },
   image_api: {
     enabled: false,
-    base_url: "",
-    api_key: "",
+    active_channel_id: "",
+    channels: [],
   },
 };
 
@@ -127,16 +128,39 @@ function normalizeThirdPartyApps(value: unknown): ThirdPartyAppsSettings {
     : {}) as { enabled?: boolean; url?: string };
   const imageApi = (typeof source.image_api === "object" && source.image_api
     ? source.image_api
-    : {}) as { enabled?: boolean; base_url?: string; api_key?: string };
+    : {}) as { enabled?: boolean; active_channel_id?: string; channels?: unknown[]; base_url?: string; api_key?: string };
+  const rawChannels = Array.isArray(imageApi.channels) ? imageApi.channels : [];
+  const legacyChannel = !rawChannels.length && (imageApi.base_url || imageApi.api_key)
+    ? [{ id: "legacy", name: "默认渠道", base_url: imageApi.base_url, api_key: imageApi.api_key }]
+    : rawChannels;
+  const usedIds = new Set<string>();
+  const channels: ThirdPartyImageChannel[] = legacyChannel.map((item, index) => {
+    const candidate = typeof item === "object" && item !== null ? item as Partial<ThirdPartyImageChannel> : {};
+    let id = String(candidate.id || `channel-${index + 1}`).trim() || `channel-${index + 1}`;
+    if (usedIds.has(id)) id = `channel-${index + 1}`;
+    let suffix = 2;
+    while (usedIds.has(id)) id = `channel-${index + 1}-${suffix++}`;
+    usedIds.add(id);
+    return {
+      id,
+      name: String(candidate.name || `渠道 ${index + 1}`).trim() || `渠道 ${index + 1}`,
+      base_url: String(candidate.base_url || "").trim().replace(/\/+$/, ""),
+      api_key: String(candidate.api_key || "").trim(),
+    };
+  });
+  const requestedActiveId = String(imageApi.active_channel_id || "").trim();
+  const activeChannelId = channels.some((channel) => channel.id === requestedActiveId)
+    ? requestedActiveId
+    : (channels[0]?.id || "");
   return {
     infinite_canvas: {
       enabled: Boolean((canvas as { enabled?: boolean }).enabled),
       url: String((canvas as { url?: string }).url || DEFAULT_THIRD_PARTY_APPS.infinite_canvas.url),
     },
     image_api: {
-      enabled: Boolean((imageApi as { enabled?: boolean }).enabled),
-      base_url: String((imageApi as { base_url?: string }).base_url || ""),
-      api_key: String((imageApi as { api_key?: string }).api_key || ""),
+      enabled: Boolean(imageApi.enabled),
+      active_channel_id: activeChannelId,
+      channels,
     },
   };
 }
@@ -332,7 +356,11 @@ type SettingsStore = {
   setProxyRuntimeClearanceField: <K extends keyof ProxyRuntimeSettings["clearance"]>(key: K, value: ProxyRuntimeSettings["clearance"][K]) => void;
   setProxyRuntimeStatusCodesText: (value: string) => void;
   setInfiniteCanvasField: <K extends keyof ThirdPartyAppsSettings["infinite_canvas"]>(key: K, value: ThirdPartyAppsSettings["infinite_canvas"][K]) => void;
-  setThirdPartyImageApiField: <K extends keyof ThirdPartyAppsSettings["image_api"]>(key: K, value: ThirdPartyAppsSettings["image_api"][K]) => void;
+  setThirdPartyImageApiEnabled: (value: boolean) => void;
+  addThirdPartyImageChannel: () => void;
+  updateThirdPartyImageChannel: (id: string, field: keyof Omit<ThirdPartyImageChannel, "id">, value: string) => void;
+  removeThirdPartyImageChannel: (id: string) => void;
+  setActiveThirdPartyImageChannel: (id: string) => void;
   testImageStorage: () => Promise<void>;
   syncImagesToWebDAV: () => Promise<void>;
   setBackupField: (key: keyof BackupSettings, value: string | boolean) => void;
@@ -515,8 +543,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
           },
           image_api: {
             enabled: Boolean(config.third_party_apps?.image_api?.enabled),
-            base_url: String(config.third_party_apps?.image_api?.base_url || "").trim(),
-            api_key: String(config.third_party_apps?.image_api?.api_key || "").trim(),
+            active_channel_id: String(config.third_party_apps?.image_api?.active_channel_id || "").trim(),
+            channels: (config.third_party_apps?.image_api?.channels || []).map((channel) => ({
+              id: String(channel.id || "").trim(),
+              name: String(channel.name || "").trim(),
+              base_url: String(channel.base_url || "").trim().replace(/\/+$/, ""),
+              api_key: String(channel.api_key || "").trim(),
+            })).filter((channel) => channel.id),
           },
         },
         backup: {
@@ -757,24 +790,51 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     });
   },
 
-  setThirdPartyImageApiField: (key, value) => {
+  setThirdPartyImageApiEnabled: (enabled) => {
     set((state) => {
-      if (!state.config) {
-        return {};
-      }
+      if (!state.config) return {};
       const apps = normalizeThirdPartyApps(state.config.third_party_apps);
-      return {
-        config: {
-          ...state.config,
-          third_party_apps: {
-            ...apps,
-            image_api: {
-              ...apps.image_api,
-              [key]: value,
-            },
-          },
-        },
-      };
+      return { config: { ...state.config, third_party_apps: { ...apps, image_api: { ...apps.image_api, enabled } } } };
+    });
+  },
+
+  addThirdPartyImageChannel: () => {
+    set((state) => {
+      if (!state.config) return {};
+      const apps = normalizeThirdPartyApps(state.config.third_party_apps);
+      const existingIds = new Set(apps.image_api.channels.map((channel) => channel.id));
+      let number = apps.image_api.channels.length + 1;
+      let id = `channel-${number}`;
+      while (existingIds.has(id)) id = `channel-${++number}`;
+      const channels = [...apps.image_api.channels, { id, name: `渠道 ${number}`, base_url: "", api_key: "" }];
+      return { config: { ...state.config, third_party_apps: { ...apps, image_api: { ...apps.image_api, active_channel_id: apps.image_api.active_channel_id || id, channels } } } };
+    });
+  },
+
+  updateThirdPartyImageChannel: (id, field, value) => {
+    set((state) => {
+      if (!state.config) return {};
+      const apps = normalizeThirdPartyApps(state.config.third_party_apps);
+      return { config: { ...state.config, third_party_apps: { ...apps, image_api: { ...apps.image_api, channels: apps.image_api.channels.map((channel) => channel.id === id ? { ...channel, [field]: value } : channel) } } } };
+    });
+  },
+
+  removeThirdPartyImageChannel: (id) => {
+    set((state) => {
+      if (!state.config) return {};
+      const apps = normalizeThirdPartyApps(state.config.third_party_apps);
+      const channels = apps.image_api.channels.filter((channel) => channel.id !== id);
+      const activeChannelId = apps.image_api.active_channel_id === id ? (channels[0]?.id || "") : apps.image_api.active_channel_id;
+      return { config: { ...state.config, third_party_apps: { ...apps, image_api: { ...apps.image_api, active_channel_id: activeChannelId, channels } } } };
+    });
+  },
+
+  setActiveThirdPartyImageChannel: (id) => {
+    set((state) => {
+      if (!state.config) return {};
+      const apps = normalizeThirdPartyApps(state.config.third_party_apps);
+      if (!apps.image_api.channels.some((channel) => channel.id === id)) return {};
+      return { config: { ...state.config, third_party_apps: { ...apps, image_api: { ...apps.image_api, active_channel_id: id } } } };
     });
   },
 
