@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import itertools
+import mmap
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -71,18 +73,72 @@ class LogService:
         with self.path.open("a", encoding="utf-8") as file:
             file.write(self._serialize_item(item) + "\n")
 
+    def _iter_lines_reverse(self):
+        """Yield non-empty JSONL records as bytes, newest first, without copying the file."""
+        with self.path.open("rb") as file:
+            if file.seek(0, 2) == 0:
+                return
+            with mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                end = len(data)
+                while end > 0:
+                    if data[end - 1:end] == b"\n":
+                        end -= 1
+                    if end <= 0:
+                        break
+                    start = data.rfind(b"\n", 0, end) + 1
+                    yield data[start:end]
+                    end = start - 1
+
+    @staticmethod
+    def _line_may_match(raw_line: str | bytes, *, type: str = "", start_date: str = "", end_date: str = "") -> bool:
+        if isinstance(raw_line, str):
+            raw_line = raw_line.encode("utf-8", errors="replace")
+        if len(raw_line) > 1_000_000 and b'"data:' in raw_line:
+            # Historic entries can contain multi-megabyte base64 images. They are
+            # not useful in a compact log list, so avoid decoding/parsing them.
+            return False
+        if type and f'"type":"{type}"'.encode() not in raw_line:
+            return False
+        if start_date or end_date:
+            match = re.search(rb'"time":"(\d{4}-\d{2}-\d{2})', raw_line)
+            if match is None:
+                return False
+            day = match.group(1).decode()
+            if start_date and day < start_date:
+                return False
+            if end_date and day > end_date:
+                return False
+        return True
+
+    @staticmethod
+    def _list_item(item: dict[str, Any]) -> dict[str, Any]:
+        """Keep list responses small; inline images can be megabytes per log entry."""
+        result = dict(item)
+        detail = item.get("detail")
+        if not isinstance(detail, dict):
+            return result
+        result["detail"] = dict(detail)
+        urls = result["detail"].get("urls")
+        if isinstance(urls, list):
+            result["detail"]["urls"] = [
+                url for url in urls
+                if isinstance(url, str) and not url.startswith("data:") and len(url) <= 4096
+            ]
+        return result
+
     def list(self, type: str = "", start_date: str = "", end_date: str = "", limit: int = 200) -> list[dict[str, Any]]:
-        if not self.path.exists():
+        if not self.path.exists() or limit <= 0:
             return []
         items: list[dict[str, Any]] = []
-        lines = self.path.read_text(encoding="utf-8").splitlines()
-        for line_number in range(len(lines) - 1, -1, -1):
-            item = self._parse_line(lines[line_number], line_number)
+        for record_number, raw_line in enumerate(self._iter_lines_reverse()):
+            if not self._line_may_match(raw_line, type=type, start_date=start_date, end_date=end_date):
+                continue
+            item = self._parse_line(raw_line.decode("utf-8", errors="replace"), record_number)
             if item is None:
                 continue
             if not self._matches_filters(item, type=type, start_date=start_date, end_date=end_date):
                 continue
-            items.append(item)
+            items.append(self._list_item(item))
             if len(items) >= limit:
                 break
         return items
@@ -332,6 +388,10 @@ class LoggedCall:
         if conv_id:
             detail["conversation_id"] = conv_id
         collected_urls = [*(urls or []), *_collect_urls(result)]
+        collected_urls = [
+            url for url in collected_urls
+            if not url.startswith("data:") and len(url) <= 4096
+        ]
         if collected_urls and not self.endpoint.startswith("/v1/search"):
             detail["urls"] = list(dict.fromkeys(collected_urls))
         log_service.add(LOG_TYPE_CALL, f"{self.summary}{suffix}", detail)
