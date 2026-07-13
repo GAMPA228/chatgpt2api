@@ -168,13 +168,11 @@ class ProxyRuntimeApiTests(unittest.TestCase):
         self.assertNotIn("cf_clearance", response.text)
         self.assertEqual(self.test_clearance_calls, ["https://chatgpt.com/backend-api/models"])
 
-    def test_health_includes_proxy_runtime_status(self) -> None:
+    def test_health_returns_only_public_liveness_state(self) -> None:
         response = self.client.get("/health")
 
         self.assertEqual(response.status_code, 200, response.text)
-        payload = response.json()
-        self.assertEqual(payload["version"], "9.9.9-test")
-        self.assertEqual(payload["proxy_runtime"]["clearance_mode"], "flaresolverr")
+        self.assertEqual(set(response.json()), {"status", "healthy"})
 
 
 if __name__ == "__main__":

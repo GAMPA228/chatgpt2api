@@ -309,21 +309,11 @@ def create_router(app_version: str) -> APIRouter:
 
     @router.get("/health")
     async def health_check():
-        """Return machine-readable service and account-pool health."""
+        """Return only public liveness state; never expose deployment details."""
         from services.account_service import account_service as acct_svc
 
         stats = acct_svc.get_stats()
-        storage = config.get_storage_backend()
-        storage_health = storage.health_check()
         healthy = stats["active"] > 0 or stats["unlimited_quota_count"] > 0
-
-        return {
-            "status": "ok" if healthy else "degraded",
-            "healthy": healthy,
-            "version": app_version,
-            "storage": {"backend": storage.get_backend_info(), "health": storage_health},
-            "proxy_runtime": proxy_settings.get_runtime_status(),
-            "accounts": stats,
-        }
+        return {"status": "ok" if healthy else "degraded", "healthy": healthy}
 
     return router
