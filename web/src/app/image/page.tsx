@@ -1263,7 +1263,19 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
           await sleep(2000);
           try {
-            const taskList = await fetchImageTasks(loadingTaskIds);
+            // Poll status in one metadata-only response. A terminal task can contain
+            // multi-megabyte base64 image data, so fetch each successful result only
+            // after its status is known. This keeps the UI responsive even when a
+            // provider returns large b64_json payloads.
+            const statusResponse = await fetchImageTasks(loadingTaskIds, { includeData: false });
+            const taskMap = new Map(statusResponse.items.map((task) => [task.id, task]));
+            for (const task of statusResponse.items) {
+              if (task.status === "success") {
+                const { items: detailItems } = await fetchImageTasks([task.id]);
+                if (detailItems[0]) taskMap.set(task.id, detailItems[0]);
+              }
+            }
+            const taskList = { ...statusResponse, items: Array.from(taskMap.values()) };
             consecutiveErrors = 0;
             if (taskList.items.length > 0) {
               // 检测是否有超时错误且需要显示重试按钮
