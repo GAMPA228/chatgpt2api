@@ -481,6 +481,14 @@ class ConfigStore:
         return bool(value)
 
     @property
+    def image_fast_return_stream_assets(self) -> bool:
+        """SSE 已包含图片 asset ID 时直接取图，不额外等待轮询确认。"""
+        value = self.data.get("image_fast_return_stream_assets", False)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
     def image_settle_enabled(self) -> bool:
         """图片二次确认机制：找到 file_ids 后等待一段时间再次确认。"""
         value = self.data.get("image_settle_enabled", True)

@@ -28,22 +28,10 @@ type ImageResultsProps = {
   formatConversationTime: (value: string) => string;
 };
 
-// Blob URL 缓存：避免 base64 超长字符串在 DOM 中，改用短小的 blob: URL
-const b64BlobUrlCache = new Map<string, string>();
-
 function getStoredImageSrc(image: StoredImage) {
-  if (image.b64_json) {
-    let url = b64BlobUrlCache.get(image.b64_json);
-    if (!url) {
-      const binary = atob(image.b64_json);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const blob = new Blob([bytes], { type: "image/png" });
-      url = URL.createObjectURL(blob);
-      b64BlobUrlCache.set(image.b64_json, url);
-    }
-    return url;
-  }
+  // Every generated task is persisted by the server. Prefer its short URL:
+  // retaining and decoding b64_json creates several large copies in one tab
+  // (JSON string, atob string, Uint8Array, Blob, decoded bitmap).
   return image.url || "";
 }
 

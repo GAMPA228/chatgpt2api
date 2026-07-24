@@ -42,7 +42,7 @@ def _third_party_image_generation(body: dict[str, Any]) -> dict[str, Any]:
             "Accept": "application/json",
         },
         json=payload,
-        timeout=180,
+        timeout=300,
         verify=False,
     )
     if response.status_code >= 400:

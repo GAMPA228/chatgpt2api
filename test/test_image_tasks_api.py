@@ -19,6 +19,7 @@ class FakeImageTaskService:
     def __init__(self):
         self.generation_calls = []
         self.edit_calls = []
+        self.list_calls = []
 
     def submit_generation(self, identity, **kwargs):
         self.generation_calls.append((identity, kwargs))
@@ -41,22 +42,32 @@ class FakeImageTaskService:
             "updated_at": "2026-01-01 00:00:00",
         }
 
-    def list_tasks(self, _identity, ids):
-        return {
-            "items": [
-                {
-                    "id": task_id,
-                    "status": "success",
-                    "mode": "generate",
-                    "created_at": "2026-01-01 00:00:00",
-                    "updated_at": "2026-01-01 00:00:00",
-                    "data": [{"url": "http://testserver/images/fake.png"}],
-                }
-                for task_id in ids
-                if task_id != "missing"
-            ],
+    def list_tasks(self, _identity, ids, *, include_data=True, limit=100, before=None):
+        self.list_calls.append({"ids": ids, "include_data": include_data, "limit": limit, "before": before})
+        source_ids = ids or ["history-task"]
+        items = [
+            {
+                "id": task_id,
+                "status": "success",
+                "mode": "generate",
+                "created_at": "2026-01-01 00:00:00",
+                "updated_at": "2026-01-01 00:00:00",
+                "data": [{"url": "http://testserver/images/fake.png"}],
+            }
+            for task_id in source_ids
+            if task_id != "missing"
+        ]
+        if not include_data:
+            for item in items:
+                item.pop("data", None)
+        result = {
+            "items": items,
             "missing_ids": [task_id for task_id in ids if task_id == "missing"],
         }
+        if not ids and limit == 1:
+            result["next_cursor"] = "cursor-1"
+            result["next_before"] = "cursor-1"
+        return result
 
 
 class ImageTasksApiTests(unittest.TestCase):
@@ -118,13 +129,64 @@ class ImageTasksApiTests(unittest.TestCase):
         images = self.fake_service.edit_calls[0][1]["images"]
         self.assertEqual(images, [(PNG_BYTES, "image_url.png", "image/png")])
 
-    def test_list_tasks_reports_missing_ids(self):
+    def test_list_tasks_with_multiple_ids_omits_image_data_by_default(self):
         response = self.client.get("/api/image-tasks?ids=task-1,missing", headers=AUTH_HEADERS)
 
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
         self.assertEqual([item["id"] for item in payload["items"]], ["task-1"])
         self.assertEqual(payload["missing_ids"], ["missing"])
+        self.assertNotIn("data", payload["items"][0])
+        self.assertEqual(self.fake_service.list_calls[-1]["include_data"], False)
+
+    def test_list_tasks_with_one_id_keeps_legacy_result_data_default(self):
+        response = self.client.get("/api/image-tasks?ids=task-1", headers=AUTH_HEADERS)
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn("data", response.json()["items"][0])
+        self.assertEqual(self.fake_service.list_calls[-1]["include_data"], True)
+
+    def test_list_tasks_without_ids_returns_owner_history(self):
+        response = self.client.get("/api/image-tasks", headers=AUTH_HEADERS)
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual([item["id"] for item in payload["items"]], ["history-task"])
+        self.assertEqual(payload["missing_ids"], [])
+        self.assertNotIn("data", payload["items"][0])
+        self.assertEqual(self.fake_service.list_calls[-1]["include_data"], False)
+        self.assertEqual(self.fake_service.list_calls[-1]["limit"], 100)
+
+    def test_list_tasks_without_ids_allows_data_only_with_explicit_pagination(self):
+        response = self.client.get(
+            "/api/image-tasks?include_data=true&limit=1&cursor=cursor-0",
+            headers=AUTH_HEADERS,
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertIn("data", payload["items"][0])
+        self.assertEqual(payload["next_cursor"], "cursor-1")
+        self.assertEqual(self.fake_service.list_calls[-1]["include_data"], True)
+        self.assertEqual(self.fake_service.list_calls[-1]["limit"], 1)
+        self.assertEqual(self.fake_service.list_calls[-1]["before"], "cursor-0")
+
+    def test_list_tasks_without_ids_include_data_true_still_needs_explicit_pagination(self):
+        response = self.client.get("/api/image-tasks?include_data=true", headers=AUTH_HEADERS)
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertNotIn("data", payload["items"][0])
+        self.assertEqual(self.fake_service.list_calls[-1]["include_data"], False)
+
+    def test_list_tasks_metadata_mode_omits_image_data(self):
+        response = self.client.get("/api/image-tasks?ids=task-1&include_data=false", headers=AUTH_HEADERS)
+
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()["items"][0]
+        self.assertEqual(item["id"], "task-1")
+        self.assertEqual(item["status"], "success")
+        self.assertNotIn("data", item)
 
 
 if __name__ == "__main__":

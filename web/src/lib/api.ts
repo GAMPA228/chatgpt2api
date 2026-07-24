@@ -294,6 +294,7 @@ export type ImageTask = {
   id: string;
   status: "queued" | "running" | "success" | "error";
   mode: "generate" | "edit";
+  prompt?: string;
   model?: ImageModel;
   size?: string;
   quality?: string;
@@ -310,6 +311,8 @@ export type ImageTask = {
 type ImageTaskListResponse = {
   items: ImageTask[];
   missing_ids: string[];
+  next_cursor?: string;
+  next_before?: string;
 };
 
 export type LoginResponse = {
@@ -556,10 +559,24 @@ export async function createImageEditTask(
   });
 }
 
-export async function fetchImageTasks(ids: string[]) {
+export async function fetchImageTasks(
+  ids: string[],
+  options: { includeData?: boolean; limit?: number; before?: string; cursor?: string } = {},
+) {
   const params = new URLSearchParams();
   if (ids.length > 0) {
     params.set("ids", ids.join(","));
+  }
+  if (options.includeData !== undefined) {
+    params.set("include_data", options.includeData ? "true" : "false");
+  }
+  if (typeof options.limit === "number" && Number.isFinite(options.limit)) {
+    params.set("limit", String(Math.max(1, Math.min(200, Math.floor(options.limit)))));
+  }
+  if (options.cursor) {
+    params.set("cursor", options.cursor);
+  } else if (options.before) {
+    params.set("before", options.before);
   }
   params.set("_t", String(Date.now()));
   return httpRequest<ImageTaskListResponse>(`/api/image-tasks?${params.toString()}`);

@@ -36,6 +36,7 @@ import {
   deleteImageConversation,
   getImageConversationStats,
   listImageConversations,
+  recoverImageConversations,
   renameImageConversation,
   saveImageConversation,
   saveImageConversations,
@@ -320,12 +321,18 @@ async function syncConversationImageTasks(items: ImageConversation[]) {
     return items;
   }
 
-  let taskList: Awaited<ReturnType<typeof fetchImageTasks>>;
-  try {
-    taskList = await fetchImageTasks(taskIds);
-  } catch {
-    return items;
+  // A polling batch may contain several tasks. The API deliberately returns
+  // metadata only for batches; fetch terminal results one at a time so a
+  // browser never parses/keeps several base64 images concurrently.
+  const statusResponse = await fetchImageTasks(taskIds, { includeData: false });
+  const resultTaskMap = new Map(statusResponse.items.map((task) => [task.id, task]));
+  for (const task of statusResponse.items) {
+    if (task.status === "success") {
+      const { items: detailItems } = await fetchImageTasks([task.id]);
+      if (detailItems[0]) resultTaskMap.set(task.id, detailItems[0]);
+    }
   }
+  const taskList = { ...statusResponse, items: Array.from(resultTaskMap.values()) };
   const taskMap = new Map(taskList.items.map((task) => [task.id, task]));
   let changed = false;
   const normalized = items.map((conversation) => {
@@ -583,6 +590,27 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       }
     };
   }, []);
+
+  const recoverHistory = useCallback(async () => {
+    try {
+      setIsLoadingHistory(true);
+      const items = await recoverImageConversations();
+      const normalizedItems = await recoverConversationHistory(items);
+      conversationsRef.current = normalizedItems;
+      setConversations(normalizedItems);
+      if (normalizedItems.length > 0) {
+        setSelectedConversationId((current) => current && normalizedItems.some((conversation) => conversation.id === current)
+          ? current
+          : pickFallbackConversationId(normalizedItems));
+      }
+      toast.success("已从服务器恢复当前账号的图片历史");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "恢复图片历史失败";
+      toast.error(message);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  }, [setConversations, setIsLoadingHistory, setSelectedConversationId]);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -1591,6 +1619,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             isLoadingHistory={isLoadingHistory}
             selectedConversationId={selectedConversationId}
             onCreateDraft={handleCreateDraft}
+            onRecoverHistory={recoverHistory}
             onClearHistory={openClearHistoryConfirm}
             onSelectConversation={setSelectedConversationId}
             onDeleteConversation={openDeleteConversationConfirm}
@@ -1617,6 +1646,10 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                   setIsHistoryOpen(false);
                 }}
                 onClearHistory={openClearHistoryConfirm}
+                onRecoverHistory={async () => {
+                  await recoverHistory();
+                  setIsHistoryOpen(false);
+                }}
                 onSelectConversation={(id) => {
                   setSelectedConversationId(id);
                   setIsHistoryOpen(false);

@@ -49,20 +49,30 @@ class LogServiceTests(unittest.TestCase):
 
         self.assertEqual(item["detail"]["urls"], ["https://example.test/image.png"])
         self.assertIn(inline_image, self.path.read_text(encoding="utf-8"))
-    def test_list_skips_historic_inline_image_records(self) -> None:
+    def test_list_summarizes_historic_inline_image_records(self) -> None:
         self.write_records([
             {
                 "id": "old-image-log",
                 "time": "2026-07-02 08:00:00",
                 "type": LOG_TYPE_CALL,
-                "detail": {"urls": ["data:image/png;base64," + "a" * 1_100_000]},
+                "summary": "文生图调用完成",
+                "detail": {
+                    "status": "success",
+                    "model": "gpt-image-2",
+                    "urls": ["data:image/png;base64," + "a" * 1_100_000],
+                },
             },
             {"id": "normal-log", "time": "2026-07-03 08:00:00", "type": LOG_TYPE_CALL, "detail": {}},
         ])
 
         items = self.service.list(type=LOG_TYPE_CALL, limit=20)
 
-        self.assertEqual([item["id"] for item in items], ["normal-log"])
+        self.assertEqual([item["id"] for item in items], ["normal-log", "old-image-log"])
+        historic = items[1]
+        self.assertEqual(historic["summary"], "文生图调用完成")
+        self.assertEqual(historic["detail"]["status"], "success")
+        self.assertEqual(historic["detail"]["model"], "gpt-image-2")
+        self.assertNotIn("urls", historic["detail"])
 
     def test_line_match_precheck_honors_type_and_date(self) -> None:
         raw_line = '{"time":"2026-07-03 08:00:00","type":"call"}'

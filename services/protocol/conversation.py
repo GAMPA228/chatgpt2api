@@ -300,17 +300,14 @@ def format_image_result(
         if not b64_json:
             continue
         revised_prompt = str(item.get("revised_prompt") or prompt).strip() or prompt
-        if response_format == "b64_json":
-            data.append({
-                "b64_json": b64_json,
-                "url": save_image_bytes(base64.b64decode(b64_json), base_url),
-                "revised_prompt": revised_prompt,
-            })
-        else:
-            data.append({
-                "url": save_image_bytes(base64.b64decode(b64_json), base_url),
-                "revised_prompt": revised_prompt,
-            })
+        # Persist the binary once and return its short URL. Returning b64_json
+        # as well made the image task response, browser polling state and
+        # IndexedDB each retain multi-megabyte strings, which can OOM Chromium.
+        # URL responses remain compatible with OpenAI's response_format=url.
+        data.append({
+            "url": save_image_bytes(base64.b64decode(b64_json), base_url),
+            "revised_prompt": revised_prompt,
+        })
     result: dict[str, Any] = {"created": created or int(time.time()), "data": data}
     if message and not data:
         result["message"] = message

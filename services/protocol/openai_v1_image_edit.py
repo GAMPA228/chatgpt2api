@@ -60,7 +60,7 @@ def _third_party_image_edit(body: dict[str, Any]) -> dict[str, Any]:
         f"{base_url}/images/edits",
         headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
         multipart=mime,
-        timeout=180,
+        timeout=300,
         verify=False,
     )
     if response.status_code >= 400:

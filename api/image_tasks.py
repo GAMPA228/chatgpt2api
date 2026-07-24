@@ -7,7 +7,11 @@ from pydantic import BaseModel, Field
 from api.image_inputs import parse_image_edit_request, read_image_sources
 from api.support import require_identity, resolve_image_base_url
 from services.content_filter import check_request
-from services.image_task_service import image_task_service
+from services.image_task_service import (
+    DEFAULT_IMAGE_TASK_LIST_LIMIT,
+    MAX_IMAGE_TASK_LIST_LIMIT,
+    image_task_service,
+)
 from services.log_service import LoggedCall
 
 
@@ -40,11 +44,32 @@ def create_router() -> APIRouter:
 
     @router.get("/api/image-tasks")
     async def list_image_tasks(
+        request: Request,
         ids: str = Query(default=""),
+        include_data: bool | None = Query(default=None),
+        limit: int = Query(default=DEFAULT_IMAGE_TASK_LIST_LIMIT, ge=1, le=MAX_IMAGE_TASK_LIST_LIMIT),
+        before: str = Query(default=""),
+        cursor: str = Query(default=""),
         authorization: str | None = Header(default=None),
     ):
         identity = require_identity(authorization)
-        return await run_in_threadpool(image_task_service.list_tasks, identity, _parse_task_ids(ids))
+        task_ids = _parse_task_ids(ids)
+        explicit_pagination = any(key in request.query_params for key in ("limit", "before", "cursor"))
+        # Multiple task IDs are used by history reconciliation and polling.
+        # Never put multiple multi-megabyte image results in one JSON payload;
+        # one explicit task detail request retains backwards-compatible data.
+        if task_ids:
+            effective_include_data = len(task_ids) == 1 if include_data is None else bool(include_data) and len(task_ids) == 1
+        else:
+            effective_include_data = bool(include_data) and explicit_pagination
+        return await run_in_threadpool(
+            image_task_service.list_tasks,
+            identity,
+            task_ids,
+            include_data=effective_include_data,
+            limit=limit,
+            before=cursor or before or None,
+        )
 
     @router.post("/api/image-tasks/generations")
     async def create_generation_task(

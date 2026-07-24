@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { LoaderCircle, MessageSquarePlus, Pencil, Trash2 } from "lucide-react";
+import { LoaderCircle, MessageSquarePlus, Pencil, RotateCcw, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -12,6 +12,7 @@ type ImageSidebarProps = {
   isLoadingHistory: boolean;
   selectedConversationId: string | null;
   onCreateDraft: () => void;
+  onRecoverHistory?: () => void | Promise<void>;
   onClearHistory: () => void | Promise<void>;
   onSelectConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void | Promise<void>;
@@ -25,6 +26,7 @@ export function ImageSidebar({
   isLoadingHistory,
   selectedConversationId,
   onCreateDraft,
+  onRecoverHistory,
   onClearHistory,
   onSelectConversation,
   onDeleteConversation,
@@ -71,6 +73,16 @@ export function ImageSidebar({
               <MessageSquarePlus className="size-4" />
               新建对话
             </Button>
+            {onRecoverHistory ? (
+              <Button
+                variant="outline"
+                className="h-10 rounded-xl border-stone-200 bg-white/85 px-3 text-stone-600 hover:bg-white"
+                onClick={() => void onRecoverHistory()}
+                title="从服务器恢复当前账号的图片历史"
+              >
+                <RotateCcw className="size-4" />
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               className="h-10 rounded-xl border-stone-200 bg-white/85 px-3 text-stone-600 hover:bg-white"

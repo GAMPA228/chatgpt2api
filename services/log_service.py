@@ -93,10 +93,10 @@ class LogService:
     def _line_may_match(raw_line: str | bytes, *, type: str = "", start_date: str = "", end_date: str = "") -> bool:
         if isinstance(raw_line, str):
             raw_line = raw_line.encode("utf-8", errors="replace")
-        if len(raw_line) > 1_000_000 and b'"data:' in raw_line:
-            # Historic entries can contain multi-megabyte base64 images. They are
-            # not useful in a compact log list, so avoid decoding/parsing them.
-            return False
+        # Historic entries can contain multi-megabyte inline base64 images.
+        # They remain valid history, but the list view must not decode or return
+        # their payload. The caller will strip those JSON string values before
+        # parsing and retain the record metadata.
         if type and f'"type":"{type}"'.encode() not in raw_line:
             return False
         if start_date or end_date:
@@ -111,6 +111,35 @@ class LogService:
         return True
 
     @staticmethod
+    def _sanitize_inline_data(raw_line: bytes) -> bytes:
+        """Replace huge JSON `data:` strings before decoding a historic record."""
+        if b'"data:' not in raw_line:
+            return raw_line
+        output = bytearray()
+        index = 0
+        while True:
+            start = raw_line.find(b'"data:', index)
+            if start < 0:
+                output.extend(raw_line[index:])
+                return bytes(output)
+            output.extend(raw_line[index:start])
+            end = start + 1
+            escaped = False
+            while end < len(raw_line):
+                char = raw_line[end]
+                if escaped:
+                    escaped = False
+                elif char == 0x5C:
+                    escaped = True
+                elif char == 0x22:
+                    break
+                end += 1
+            if end >= len(raw_line):
+                return raw_line
+            output.extend(b'"[inline image omitted]"')
+            index = end + 1
+
+    @staticmethod
     def _list_item(item: dict[str, Any]) -> dict[str, Any]:
         """Keep list responses small; inline images can be megabytes per log entry."""
         result = dict(item)
@@ -122,8 +151,13 @@ class LogService:
         if isinstance(urls, list):
             result["detail"]["urls"] = [
                 url for url in urls
-                if isinstance(url, str) and not url.startswith("data:") and len(url) <= 4096
+                if isinstance(url, str)
+                and not url.startswith("data:")
+                and url != "[inline image omitted]"
+                and len(url) <= 4096
             ]
+            if not result["detail"]["urls"]:
+                result["detail"].pop("urls", None)
         return result
 
     def list(self, type: str = "", start_date: str = "", end_date: str = "", limit: int = 200) -> list[dict[str, Any]]:
@@ -133,7 +167,10 @@ class LogService:
         for record_number, raw_line in enumerate(self._iter_lines_reverse()):
             if not self._line_may_match(raw_line, type=type, start_date=start_date, end_date=end_date):
                 continue
-            item = self._parse_line(raw_line.decode("utf-8", errors="replace"), record_number)
+            item = self._parse_line(
+                self._sanitize_inline_data(raw_line).decode("utf-8", errors="replace"),
+                record_number,
+            )
             if item is None:
                 continue
             if not self._matches_filters(item, type=type, start_date=start_date, end_date=end_date):

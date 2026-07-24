@@ -2561,6 +2561,21 @@ class OpenAIBackendAPI:
         file_ids = [item for item in file_ids if item != "file_upload"]
         sediment_ids = list(sediment_ids)
         timeout = poll_timeout_secs if poll_timeout_secs is not None else config.image_poll_timeout_secs
+        # SSE 已携带 asset ID 时，上游通常已完成产物落地；跳过确认轮询，
+        # 直接解析下载地址。这样不会再为二次确认额外增加 settle + 一轮轮询延迟。
+        if (
+            poll
+            and conversation_id
+            and (file_ids or sediment_ids)
+            and config.image_fast_return_stream_assets
+        ):
+            logger.info({
+                "event": "image_resolve_fast_return_stream_assets",
+                "conversation_id": conversation_id,
+                "file_ids": file_ids,
+                "sediment_ids": sediment_ids,
+            })
+            return self._resolve_image_urls(conversation_id, file_ids, sediment_ids)
         # 当 check-before-hit 和 settle 均已关闭，且 SSE 已给出 file_ids 时，
         # 跳过轮询直接解析 URL，省去 initial_wait + 轮询耗时。
         if poll and conversation_id and (file_ids or sediment_ids):

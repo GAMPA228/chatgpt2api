@@ -154,6 +154,17 @@ class MultiImageResultTests(unittest.TestCase):
 
         self.assertEqual(urls, ["https://files.test/one.png"])
 
+    def test_resolver_returns_stream_asset_without_confirmation_when_enabled(self) -> None:
+        backend = FakeBackend()
+        backend.file_urls = {"file-one": "https://files.test/one.png"}
+        backend._get_conversation = mock.Mock(side_effect=AssertionError("should not poll"))
+
+        with mock.patch.dict(config.data, {"image_fast_return_stream_assets": True}):
+            urls = backend.resolve_conversation_image_urls("conv-1", ["file-one"], [], poll=True)
+
+        self.assertEqual(urls, ["https://files.test/one.png"])
+        backend._get_conversation.assert_not_called()
+
     def test_responses_stream_emits_all_image_output_items(self) -> None:
         first = base64.b64encode(b"first").decode("ascii")
         second = base64.b64encode(b"second").decode("ascii")
