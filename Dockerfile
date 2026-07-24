@@ -1,13 +1,20 @@
+# syntax=docker/dockerfile:1.7
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
 ARG TARGETARCH
 
-FROM --platform=$BUILDPLATFORM node:22-alpine AS web-build
+FROM node:22-alpine AS web-build
 
+# Override at build time when a remote server needs an internal/npm mirror:
+# docker compose build --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+ARG NPM_REGISTRY=https://registry.npmjs.org/
 WORKDIR /app/web
 
-COPY web/package.json web/bun.lock ./
-RUN npm install
+# package-lock.json is npm's authoritative lockfile.  bun.lock must not be
+# paired with npm install: npm ignores it and resolves dependencies again.
+COPY web/package.json web/package-lock.json ./
+RUN --mount=type=cache,id=npm-cache-${BUILDPLATFORM},target=/root/.npm \
+    npm ci --prefer-offline --no-audit --no-fund --registry="$NPM_REGISTRY"
 
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
@@ -15,7 +22,7 @@ COPY web ./
 RUN NEXT_PUBLIC_APP_VERSION="$(cat /app/VERSION)" npm run build
 
 
-FROM --platform=$TARGETPLATFORM python:3.13-slim AS app
+FROM python:3.13-slim AS app
 
 ARG TARGETPLATFORM
 ARG TARGETARCH
@@ -43,7 +50,8 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY main.py ./
-COPY config.json ./
+# config.json is a local secret mounted by docker-compose.local.yml; it must
+# never be copied into the image or Git repository.
 COPY VERSION ./
 COPY api ./api
 COPY services ./services
