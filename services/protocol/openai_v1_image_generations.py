@@ -51,7 +51,25 @@ def _third_party_image_generation(body: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             detail = response.text[:800]
         raise RuntimeError(f"third-party image generation failed: HTTP {response.status_code}, {detail}")
-    return response.json()
+    result = response.json()
+    # Some upstreams ignore response_format=url and return b64_json. Persist it
+    # before the task reaches the browser: task polling then carries a compact
+    # URL and the result image can load normally instead of blocking on a multi-
+    # megabyte JSON/IndexedDB update.
+    data = result.get("data")
+    if isinstance(data, list):
+        from services.protocol.conversation import format_image_result
+
+        if any(isinstance(item, dict) and item.get("b64_json") for item in data):
+            return format_image_result(
+                data,
+                str(body.get("prompt") or ""),
+                "url",
+                base_url=str(body.get("base_url") or "") or None,
+                created=result.get("created") if isinstance(result.get("created"), int) else None,
+                message=str(result.get("message") or ""),
+            )
+    return result
 
 
 def _use_third_party_image_api() -> bool:
