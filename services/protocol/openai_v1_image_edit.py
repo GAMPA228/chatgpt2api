@@ -7,6 +7,7 @@ from curl_cffi import CurlMime, requests
 from PIL import Image
 
 from services.config import config
+from services.protocol.image_proxy import image_request_proxy_kwargs
 from services.protocol.conversation import (
     ConversationRequest,
     ImageGenerationError,
@@ -62,6 +63,7 @@ def _third_party_image_edit(body: dict[str, Any]) -> dict[str, Any]:
         multipart=mime,
         timeout=300,
         verify=False,
+        **image_request_proxy_kwargs(),
     )
     if response.status_code >= 400:
         try:

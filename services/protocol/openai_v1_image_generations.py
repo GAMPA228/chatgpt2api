@@ -5,6 +5,7 @@ from typing import Any, Iterator
 from curl_cffi import requests
 
 from services.config import config
+from services.protocol.image_proxy import image_request_proxy_kwargs
 from services.protocol.conversation import (
     ConversationRequest,
     collect_image_outputs,
@@ -44,6 +45,7 @@ def _third_party_image_generation(body: dict[str, Any]) -> dict[str, Any]:
         json=payload,
         timeout=300,
         verify=False,
+        **image_request_proxy_kwargs(),
     )
     if response.status_code >= 400:
         try:
